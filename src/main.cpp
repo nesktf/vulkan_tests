@@ -11,38 +11,67 @@
 
 #include <cassert>
 
-int main() {
-  glfwInit();
-  glfwSwapInterval(0);
+constexpr std::size_t WIDTH = 800;
+constexpr std::size_t HEIGHT = 600;
 
-  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
-  GLFWwindow* win = glfwCreateWindow(800, 600, "test", nullptr, nullptr);
-  if (!win) {
-    fmt::print("Failed to create GLFW window\n");
-    return 1;
+class application {
+public:
+  void run() {
+    init_window();
+    init_vulkan();
+    main_loop();
+    cleanup();
   }
-  // glfwMakeContextCurrent(win);
 
-  uint32_t extension_count{0};
-  vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, nullptr);
+private:
+  void init_window() {
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    _win = glfwCreateWindow(WIDTH, HEIGHT, "test", nullptr, nullptr);
 
-  fmt::print("{} vulkan extensions supported\n", extension_count);
+    if (!_win) {
+      throw std::runtime_error{"Failed to create GLFW window"};
+    }
 
-  glm::mat4 mat{};
-  glm::vec4 vec{};
-  auto test = mat*vec;
 
-  while (!glfwWindowShouldClose(win)) {
-    glfwPollEvents();
 
-    if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-      glfwSetWindowShouldClose(win, 1);
+  }
+
+  void init_vulkan() {
+    uint32_t extension_count{0};
+    vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, nullptr);
+
+    fmt::print("{} vulkan extensions supported\n", extension_count);
+  }
+
+  void main_loop() {
+    while (!glfwWindowShouldClose(_win)) {
+      glfwPollEvents();
+
+      if (glfwGetKey(_win, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        glfwSetWindowShouldClose(_win, 1);
+      }
+
     }
   }
 
-  glfwDestroyWindow(win);
-  glfwTerminate();
+  void cleanup() {
+    glfwDestroyWindow(_win);
+    glfwTerminate();
+  }
 
-  return 0;
+private:
+  GLFWwindow* _win;
+};
+
+int main() {
+  application app;
+  try {
+    app.run();
+  } catch (const std::exception& e) {
+    fmt::print(stderr, "{}", e.what());
+    return EXIT_FAILURE;
+  }
+
+  return EXIT_SUCCESS;
 }
