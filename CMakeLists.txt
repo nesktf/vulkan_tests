@@ -15,6 +15,18 @@ find_package(fmt REQUIRED)
 list(APPEND LIBS_INCLUDE ${FMT_INCLUDE_DIRS})
 list(APPEND LIBS_LINK fmt)
 
+find_package(glm CONFIG REQUIRED)
+list(APPEND LIBS_INCLUDE ${GLM_INCLUDE_DIRS})
+list(APPEND LIBS_LINK glm::glm)
+
+find_package(assimp REQUIRED)
+list(APPEND LIBS_INCLUDE ${ASSIMP_INCLUDE_DIRS})
+list(APPEND LIBS_LINK assimp)
+
+find_package(VulkanHeaders REQUIRED)
+list(APPEND LIBS_INCLUDE ${VULKANHEADERS_INCLUDE_DIRS})
+list(APPEND LIBS_LINK vulkan)
+
 ## For PkgConfig
 find_package(PkgConfig REQUIRED)
 pkg_search_module(GLFW REQUIRED glfw3)
@@ -22,7 +34,7 @@ list(APPEND LIBS_INCLUDE ${GLFW_INCLUDE_DIRS})
 list(APPEND LIBS_LINK glfw)
 
 file(GLOB_RECURSE SOURCE_FILES "src/*.cpp")
-list(APPEND SOURCE_FILES "lib/glad/glad.c")
+# list(APPEND SOURCE_FILES "lib/glad/glad.c")
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 target_include_directories(${PROJECT_NAME} PUBLIC lib src ${LIBS_INCLUDE})

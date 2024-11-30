@@ -1,34 +1,37 @@
-#include <glad/glad.h>
-
+#define GLFW_INCLUDE_VULKAN
+// #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/vec4.hpp>
+#include <glm/mat4x4.hpp>
 
 #include <fmt/format.h>
 
 #include <cassert>
-#include <iostream>
 
 int main() {
   glfwInit();
   glfwSwapInterval(0);
 
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-  glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-  glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
   GLFWwindow* win = glfwCreateWindow(800, 600, "test", nullptr, nullptr);
   if (!win) {
-    std::cout << "Failed to create window\n";
+    fmt::print("Failed to create GLFW window\n");
     return 1;
   }
+  // glfwMakeContextCurrent(win);
 
-  glfwMakeContextCurrent(win);
+  uint32_t extension_count{0};
+  vkEnumerateInstanceExtensionProperties(nullptr, &extension_count, nullptr);
 
-  if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-    glfwDestroyWindow(win);
-    std::cout << "Failed to init glad\n";
-    return 1;
-  }
+  fmt::print("{} vulkan extensions supported\n", extension_count);
 
+  glm::mat4 mat{};
+  glm::vec4 vec{};
+  auto test = mat*vec;
 
   while (!glfwWindowShouldClose(win)) {
     glfwPollEvents();
@@ -36,12 +39,10 @@ int main() {
     if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
       glfwSetWindowShouldClose(win, 1);
     }
-
-    glClearColor(.3f, .3f, .3f, 1.f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glfwSwapBuffers(win);
   }
+
+  glfwDestroyWindow(win);
+  glfwTerminate();
 
   return 0;
 }
