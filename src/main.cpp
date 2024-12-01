@@ -85,6 +85,7 @@ private:
     create_instance();
     setup_debug_messenger();
     pick_physical_device();
+    create_logical_device();
   }
 
   void main_loop() {
@@ -99,6 +100,7 @@ private:
   }
 
   void cleanup() {
+    vkDestroyDevice(_vk_device, nullptr); // Cleans up device queues too
     if (enable_validation_layers) {
       DestroyDebugUtilsMessengerEXT(_vk_instance, _debug_messenger, nullptr);
     }
@@ -265,8 +267,7 @@ private:
     }
 
     // Second param is a custom allocator callback, null for now
-    VkResult res = vkCreateInstance(&create_info, nullptr, &_vk_instance);
-    if (res != VK_SUCCESS) {
+    if (vkCreateInstance(&create_info, nullptr, &_vk_instance) != VK_SUCCESS) {
       throw std::runtime_error{"Failed to create vulkan instance"};
     }
     fmt::print("Vulkan instance initialized\n");
@@ -362,12 +363,55 @@ private:
     fmt::print(" - Driver version: {}\n", props.driverVersion);
   }
 
+  void create_logical_device() {
+    // Create a device to interface with the physical device
+    auto indices = find_queue_families(_vk_physical_device);
+
+    // How many queues we want for a single queue family?
+    VkDeviceQueueCreateInfo queue_info{};
+    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_info.queueFamilyIndex = indices.graphics_family.value();// The queue family with graphics
+    queue_info.queueCount = 1;
+
+    // Priority for the scheduling of command buffer execution
+    float queue_priority {1.f};
+    queue_info.pQueuePriorities = &queue_priority;
+
+    // Which physical device features are we going to use?
+    VkPhysicalDeviceFeatures features{}; // all VK_FALSE for now
+
+    VkDeviceCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    create_info.pQueueCreateInfos = &queue_info;
+    create_info.queueCreateInfoCount = 1;
+    create_info.pEnabledFeatures = &features;
+
+    // Specify extensions and validation layers (device specific this time)
+    create_info.enabledExtensionCount = 0;
+
+    if (enable_validation_layers) {
+      create_info.enabledLayerCount = static_cast<uint32_t>(validation_layers.size());
+      create_info.ppEnabledLayerNames = validation_layers.data();
+    } else {
+      create_info.enabledLayerCount = 0;
+    }
+
+    if (vkCreateDevice(_vk_physical_device, &create_info, nullptr, &_vk_device) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create logical device"};
+    }
+
+    // Retrieve queue handles for each queue family
+    vkGetDeviceQueue(_vk_device, indices.graphics_family.value(), 0, &_graphics_queue); // index 0
+  }
+
 
 private:
   GLFWwindow* _win;
   VkInstance _vk_instance;
   VkDebugUtilsMessengerEXT _debug_messenger;
   VkPhysicalDevice _vk_physical_device{VK_NULL_HANDLE};
+  VkDevice _vk_device;
+  VkQueue _graphics_queue;
 };
 
 int main() {
