@@ -104,6 +104,7 @@ private:
     pick_physical_device();
     create_logical_device();
     create_swap_chain();
+    create_image_views();
   }
 
   void main_loop() {
@@ -118,6 +119,9 @@ private:
   }
 
   void cleanup() {
+    for (auto view : _vk_swapchain_image_views) {
+      vkDestroyImageView(_vk_device, view, nullptr);
+    }
     vkDestroySwapchainKHR(_vk_device, _vk_swapchain, nullptr);
     vkDestroyDevice(_vk_device, nullptr); // Cleans up device queues too
     if (enable_validation_layers) {
@@ -224,7 +228,7 @@ private:
     create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     create_info.messageSeverity = 
       VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-      VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+      // VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
       VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
       VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
     create_info.messageType =
@@ -617,6 +621,41 @@ private:
     vkGetSwapchainImagesKHR(_vk_device, _vk_swapchain, &image_count, _vk_swapchain_images.data());
   }
 
+  void create_image_views() {
+    // An image view describes how to access an image and which part of it to access
+
+    _vk_swapchain_image_views.resize(_vk_swapchain_images.size());
+    for (std::size_t i = 0; i < _vk_swapchain_images.size(); ++i) {
+      VkImageViewCreateInfo create_info{};
+      create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+      create_info.image = _vk_swapchain_images[i];
+
+      create_info.viewType = VK_IMAGE_VIEW_TYPE_2D; // Treat the image as a 2D texture
+      create_info.format = _vk_swapchain_format;
+
+      // Map the color channels to something, VK_COMPONENT_SWIZZLE_IDENTITY by default
+      create_info.components = VkComponentMapping {
+        .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+        .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+      };
+
+      // Only one layer per image
+      create_info.subresourceRange = VkImageSubresourceRange {
+        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .baseMipLevel = 0,
+        .levelCount = 1,
+        .baseArrayLayer = 0,
+        .layerCount = 1,
+      };
+
+      if (vkCreateImageView(_vk_device, &create_info, nullptr, &_vk_swapchain_image_views[i]) != VK_SUCCESS) {
+        throw std::runtime_error{"Failed to create image views"};
+      }
+    }
+  }
+
 
 private:
   GLFWwindow* _win;
@@ -633,6 +672,7 @@ private:
   VkExtent2D _vk_swapchain_extent;
   VkSwapchainKHR _vk_swapchain;
   std::vector<VkImage> _vk_swapchain_images;
+  std::vector<VkImageView> _vk_swapchain_image_views;
 };
 
 int main() {
