@@ -12,6 +12,7 @@
 #include <cassert>
 #include <vector>
 #include <optional>
+#include <set>
 
 constexpr std::size_t WIDTH = 800;
 constexpr std::size_t HEIGHT = 600;
@@ -51,8 +52,11 @@ void DestroyDebugUtilsMessengerEXT(
 
 struct queue_family_indices {
   std::optional<uint32_t> graphics_family;
+  std::optional<uint32_t> present_family;
 
-  bool is_complete() const { return graphics_family.has_value(); }
+  bool is_complete() const { 
+    return graphics_family.has_value() && present_family.has_value();
+  }
 };
 
 #ifdef NDEBUG
@@ -84,6 +88,7 @@ private:
   void init_vulkan() {
     create_instance();
     setup_debug_messenger();
+    create_surface();
     pick_physical_device();
     create_logical_device();
   }
@@ -104,6 +109,7 @@ private:
     if (enable_validation_layers) {
       DestroyDebugUtilsMessengerEXT(_vk_instance, _debug_messenger, nullptr);
     }
+    vkDestroySurfaceKHR(_vk_instance, _vk_surface, nullptr);
     vkDestroyInstance(_vk_instance, nullptr);
 
     glfwDestroyWindow(_win);
@@ -285,6 +291,18 @@ private:
     }
   }
 
+  void create_surface() {
+    // Create window surface (has to be done before device selection)
+    // It needs the VK_KHR_surface extension, but it is already included
+    // in the glfw extension list
+    if (glfwCreateWindowSurface(_vk_instance, _win, nullptr, &_vk_surface) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create window surface"};
+    }
+    // If not using glfw, has to be done passing an XCB connection and
+    // window details from X11 in vkCreateXcbSurfaceKHR
+    // (who cares about windows right?)
+  }
+
   queue_family_indices find_queue_families(VkPhysicalDevice device) {
     queue_family_indices indices;
 
@@ -293,11 +311,19 @@ private:
     std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.data());
 
-    // Require a device with a family that supports at least graphics commands
     uint i = 0;
     for (const auto& family : queue_families) {
+      // Require a device with a queue family that supports graphics commands
       if (family.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
         indices.graphics_family = i;
+      }
+
+      // Require a device with a queue family that supports presentation
+      // (might not be the same queue as the graphics one, so we store another index)
+      VkBool32 present_support{false};
+      vkGetPhysicalDeviceSurfaceSupportKHR(device, i, _vk_surface, &present_support);
+      if (present_support) {
+        indices.present_family = i;
       }
 
       if (indices.is_complete()) {
@@ -367,23 +393,31 @@ private:
     // Create a device to interface with the physical device
     auto indices = find_queue_families(_vk_physical_device);
 
-    // How many queues we want for a single queue family?
-    VkDeviceQueueCreateInfo queue_info{};
-    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_info.queueFamilyIndex = indices.graphics_family.value();// The queue family with graphics
-    queue_info.queueCount = 1;
+    std::vector<VkDeviceQueueCreateInfo> queue_infos;
+    std::set<uint32_t> unique_queue_families = { 
+      indices.graphics_family.value(), indices.present_family.value()
+    }; // To avoid adding the same queue family more than once
 
-    // Priority for the scheduling of command buffer execution
-    float queue_priority {1.f};
-    queue_info.pQueuePriorities = &queue_priority;
+
+    float queue_priority {1.f}; // Priority for the scheduling of command buffer execution
+
+    // How many queues we want for each queue family?
+    for (uint32_t family : unique_queue_families) {
+      VkDeviceQueueCreateInfo queue_info{};
+      queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+      queue_info.queueFamilyIndex = family;
+      queue_info.queueCount = 1;
+      queue_info.pQueuePriorities = &queue_priority;
+      queue_infos.emplace_back(queue_info);
+    }
 
     // Which physical device features are we going to use?
     VkPhysicalDeviceFeatures features{}; // all VK_FALSE for now
 
     VkDeviceCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    create_info.pQueueCreateInfos = &queue_info;
-    create_info.queueCreateInfoCount = 1;
+    create_info.pQueueCreateInfos = queue_infos.data();
+    create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_infos.size());
     create_info.pEnabledFeatures = &features;
 
     // Specify extensions and validation layers (device specific this time)
@@ -402,6 +436,7 @@ private:
 
     // Retrieve queue handles for each queue family
     vkGetDeviceQueue(_vk_device, indices.graphics_family.value(), 0, &_graphics_queue); // index 0
+    vkGetDeviceQueue(_vk_device, indices.present_family.value(), 0, &_present_queue); // index 0
   }
 
 
@@ -409,9 +444,11 @@ private:
   GLFWwindow* _win;
   VkInstance _vk_instance;
   VkDebugUtilsMessengerEXT _debug_messenger;
+  VkSurfaceKHR _vk_surface;
   VkPhysicalDevice _vk_physical_device{VK_NULL_HANDLE};
   VkDevice _vk_device;
   VkQueue _graphics_queue;
+  VkQueue _present_queue;
 };
 
 int main() {
