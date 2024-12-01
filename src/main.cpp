@@ -11,6 +11,7 @@
 
 #include <cassert>
 #include <vector>
+#include <optional>
 
 constexpr std::size_t WIDTH = 800;
 constexpr std::size_t HEIGHT = 600;
@@ -48,6 +49,12 @@ void DestroyDebugUtilsMessengerEXT(
   }
 }
 
+struct queue_family_indices {
+  std::optional<uint32_t> graphics_family;
+
+  bool is_complete() const { return graphics_family.has_value(); }
+};
+
 #ifdef NDEBUG
 const bool enable_validation_layers = false;
 #else
@@ -77,6 +84,7 @@ private:
   void init_vulkan() {
     create_instance();
     setup_debug_messenger();
+    pick_physical_device();
   }
 
   void main_loop() {
@@ -207,18 +215,6 @@ private:
     return create_info;
   }
 
-  void setup_debug_messenger() {
-    // Set the messenger callback
-    if (!enable_validation_layers) {
-      return;
-    }
-
-    auto create_info = create_messenger_info();
-    if (CreateDebugUtilsMessengerEXT(_vk_instance, &create_info, nullptr, &_debug_messenger) != VK_SUCCESS) {
-      throw std::runtime_error{"Failed to setup debug messenger"};
-    }
-  }
-
   void create_instance() {
     if (enable_validation_layers && !check_validation_layer_support()) {
       throw std::runtime_error{"Validation layers not available :c"};
@@ -276,10 +272,102 @@ private:
     fmt::print("Vulkan instance initialized\n");
   }
 
+  void setup_debug_messenger() {
+    // Set the messenger callback
+    if (!enable_validation_layers) {
+      return;
+    }
+
+    auto create_info = create_messenger_info();
+    if (CreateDebugUtilsMessengerEXT(_vk_instance, &create_info, nullptr, &_debug_messenger) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to setup debug messenger"};
+    }
+  }
+
+  queue_family_indices find_queue_families(VkPhysicalDevice device) {
+    queue_family_indices indices;
+
+    uint32_t queue_family_count{0};
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, nullptr);
+    std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.data());
+
+    // Require a device with a family that supports at least graphics commands
+    uint i = 0;
+    for (const auto& family : queue_families) {
+      if (family.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        indices.graphics_family = i;
+      }
+
+      if (indices.is_complete()) {
+        break;
+      }
+
+      ++i;
+    }
+
+    return indices;
+  } 
+
+  bool is_device_suitable(VkPhysicalDevice device) {
+    // VkPhysicalDeviceProperties props; // Basic device properties
+    // VkPhysicalDeviceFeatures features; // Optional features
+    //
+    // vkGetPhysicalDeviceProperties(device, &props);
+    // vkGetPhysicalDeviceFeatures(device, &features);
+
+    // example:
+    // return props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU && features.geometryShader;
+
+    // From the tutorial:
+    // Instead of checking if a device is suitable and going with the first one, you could
+    // also give each device a score and pick the highest, or fallback to an integrated
+    // GPU if that's the only available one
+
+
+    // For now, just limit ourselves to require some queue families
+    auto indices = find_queue_families(device);
+
+    return indices.is_complete();
+  }
+
+  void pick_physical_device() {
+    // Select the first suitable physical device found
+    uint32_t device_count{0};
+    vkEnumeratePhysicalDevices(_vk_instance, &device_count, nullptr);
+    if (device_count == 0) {
+      throw std::runtime_error{"Failed to find a GPU with Vulkan support"};
+    }
+
+    std::vector<VkPhysicalDevice> devices(device_count);
+    vkEnumeratePhysicalDevices(_vk_instance, &device_count, devices.data());
+    for (const auto& dev : devices) {
+      if (is_device_suitable(dev)) {
+        _vk_physical_device = dev;
+        break;
+      }
+    }
+    if (_vk_physical_device == VK_NULL_HANDLE) {
+      throw std::runtime_error{"Failed to find a suitable GPU"};
+    }
+
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(_vk_physical_device, &props);
+
+    fmt::print("Vulkan device information:\n");
+    fmt::print(" - Name: {}\n", props.deviceName);
+    fmt::print(" - Device ID: {}\n", props.deviceID);
+    fmt::print(" - Vendor ID: {}\n", props.vendorID);
+    fmt::print(" - API version: {}\n", props.apiVersion);
+    fmt::print(" - Driver version: {}\n", props.driverVersion);
+  }
+
+
 private:
   GLFWwindow* _win;
   VkInstance _vk_instance;
   VkDebugUtilsMessengerEXT _debug_messenger;
+  VkPhysicalDevice _vk_physical_device{VK_NULL_HANDLE};
 };
 
 int main() {
