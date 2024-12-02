@@ -15,6 +15,9 @@
 #include <set>
 #include <algorithm>
 #include <limits>
+#include <string>
+#include <sstream>
+#include <fstream>
 
 constexpr std::size_t WIDTH = 800;
 constexpr std::size_t HEIGHT = 600;
@@ -71,6 +74,22 @@ struct swapchain_support_details {
   std::vector<VkPresentModeKHR> present_modes;
 };
 
+static std::optional<std::string> file_contents(std::string_view path) {
+  std::string out {};
+  std::fstream fs{path.data()};
+
+  if (!fs.is_open()) {
+    return std::nullopt;
+  }
+
+  std::ostringstream ss;
+  ss << fs.rdbuf();
+  out = ss.str();
+
+  fs.close();
+  return out;
+}
+
 #ifdef NDEBUG
 const bool enable_validation_layers = false;
 #else
@@ -105,6 +124,8 @@ private:
     create_logical_device();
     create_swap_chain();
     create_image_views();
+    create_render_pass();
+    create_graphics_pipeline();
   }
 
   void main_loop() {
@@ -119,6 +140,9 @@ private:
   }
 
   void cleanup() {
+    vkDestroyPipeline(_vk_device, _vk_pipeline, nullptr);
+    vkDestroyPipelineLayout(_vk_device, _vk_pipeline_layout, nullptr);
+    vkDestroyRenderPass(_vk_device, _vk_render_pass, nullptr);
     for (auto view : _vk_swapchain_image_views) {
       vkDestroyImageView(_vk_device, view, nullptr);
     }
@@ -304,7 +328,8 @@ private:
     }
 
     auto create_info = create_messenger_info();
-    if (CreateDebugUtilsMessengerEXT(_vk_instance, &create_info, nullptr, &_debug_messenger) != VK_SUCCESS) {
+    if (CreateDebugUtilsMessengerEXT(_vk_instance, &create_info, nullptr, &_debug_messenger) 
+        != VK_SUCCESS) {
       throw std::runtime_error{"Failed to setup debug messenger"};
     }
   }
@@ -505,15 +530,17 @@ private:
     }
 
     // Retrieve queue handles for each queue family
-    vkGetDeviceQueue(_vk_device, indices.graphics_family.value(), 0, &_vk_graphics_queue); // index 0
-    vkGetDeviceQueue(_vk_device, indices.present_family.value(), 0, &_vk_present_queue); // index 0
+    // index 0 for both
+    vkGetDeviceQueue(_vk_device, indices.graphics_family.value(), 0, &_vk_graphics_queue); 
+    vkGetDeviceQueue(_vk_device, indices.present_family.value(), 0, &_vk_present_queue);
   }
 
   VkSurfaceFormatKHR choose_swap_surface_format(const std::vector<VkSurfaceFormatKHR>& formats) {
     // Try to get a swap surface with B8G8R8A8 pixel format or just use the first one
     // if there is not one available
     for (const auto& format : formats) {
-      if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+      if (format.format == VK_FORMAT_B8G8R8A8_SRGB
+          && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         return format;
       }
     }
@@ -521,7 +548,7 @@ private:
   }
 
   VkPresentModeKHR choose_swap_present_mode(const std::vector<VkPresentModeKHR>& modes) {
-    // VK_PRESENT_MODE_IMMEDIATE_KHR -> Images submited are transferred to the screen immediatley
+    // VK_PRESENT_MODE_IMMEDIATE_KHR -> Images submited are transferred to the screen immediately
     // VK_PRESENT_MODE_FIFO_KHR -> The swap chain is a FIFO queue of images (double buffering)
     // VK_PRESENT_MODE_FIFO_RELAXED_KHR -> Doesn't wait for next vblank if the queue was empty
     // VK_PRESENT_MODE_MAILBOX_KHR -> Triple buffering
@@ -650,10 +677,254 @@ private:
         .layerCount = 1,
       };
 
-      if (vkCreateImageView(_vk_device, &create_info, nullptr, &_vk_swapchain_image_views[i]) != VK_SUCCESS) {
+      if (vkCreateImageView(_vk_device, &create_info, nullptr, &_vk_swapchain_image_views[i]) 
+          != VK_SUCCESS) {
         throw std::runtime_error{"Failed to create image views"};
       }
     }
+  }
+
+  VkShaderModule create_shader_module(std::string_view src) {
+    VkShaderModuleCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    create_info.codeSize = src.size();
+    create_info.pCode = reinterpret_cast<const uint32_t*>(src.data());
+
+    VkShaderModule shader;
+    if (vkCreateShaderModule(_vk_device, &create_info, nullptr, &shader) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create shader module"};
+    }
+
+    return shader;
+  }
+
+  void create_render_pass() {
+    // Specify all the framebuffer attachments that will be used while rendering
+
+    // A single color buffer attachment, represented by one of the images from the swap chain
+    VkAttachmentDescription color_attachment{};
+    color_attachment.format = _vk_swapchain_format; // Same as the swapchain image format
+    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    // What will happen with the data in the attachment before and after rendering
+    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear values at the start
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // Store rendered contents in memory
+
+    // No stencil buffer for now
+    color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+    // Layout for the framebuffer image (?) before and after the render pass
+    color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+
+    // Things for subpasses, each one references one or more of the previous attachments
+    VkAttachmentReference color_attachment_ref{};
+    color_attachment_ref.attachment = 0;
+    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    // Only one subpass for the fragment shader out_color
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // It's a graphics subpass
+    subpass.colorAttachmentCount = 1;
+
+    // This maps to the location index in the shader:
+    // layout(location = 0) out vec4 out_color;
+    subpass.pColorAttachments = &color_attachment_ref;
+
+    VkRenderPassCreateInfo render_pass{};
+    render_pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    render_pass.attachmentCount = 1;
+    render_pass.pAttachments = &color_attachment;
+    render_pass.subpassCount = 1;
+    render_pass.pSubpasses = &subpass;
+
+    if (vkCreateRenderPass(_vk_device, &render_pass, nullptr, &_vk_render_pass) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create render pass"};
+    }
+  }
+
+  void create_graphics_pipeline() {
+    // Load shader modules from bytecode
+    auto vert_src = file_contents("res/shader.vs.spv");
+    auto frag_src = file_contents("res/shader.fs.spv");
+
+    auto vert_module = create_shader_module(vert_src.value());
+    auto frag_module = create_shader_module(frag_src.value());
+
+    VkPipelineShaderStageCreateInfo vert_stage_info{};
+    vert_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vert_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_stage_info.module = vert_module;
+    vert_stage_info.pName = "main";
+
+    VkPipelineShaderStageCreateInfo frag_stage_info{};
+    frag_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    frag_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frag_stage_info.module = frag_module;
+    frag_stage_info.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shader_stages[] = {vert_stage_info, frag_stage_info};
+
+    // Things that can be changed without reconstructing the pipeline
+    // The data for these has to be specified at drawing time
+    std::vector<VkDynamicState> dynamic_states = {
+      VK_DYNAMIC_STATE_VIEWPORT,
+      VK_DYNAMIC_STATE_SCISSOR,
+    };
+    VkPipelineDynamicStateCreateInfo dynamic_state{};
+    dynamic_state.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state.dynamicStateCount = static_cast<uint32_t>(dynamic_states.size());
+    dynamic_state.pDynamicStates = dynamic_states.data();
+
+    // Specify the format of the vertex data passed to the vertex shader
+    // No vertex data for now
+    VkPipelineVertexInputStateCreateInfo vertex_input{};
+    vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertex_input.vertexBindingDescriptionCount = 0;
+    vertex_input.pVertexBindingDescriptions = nullptr;
+    vertex_input.vertexAttributeDescriptionCount = 0;
+    vertex_input.pVertexAttributeDescriptions = nullptr;
+
+    // Describe the primitive that will be used for drawing
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{};
+    input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    input_assembly.primitiveRestartEnable = VK_FALSE; // Breakup _STRIP primitives for reuse
+
+    // // Equivalent to glViewport
+    // VkViewport viewport{};
+    // viewport.x = 0.f;
+    // viewport.y = 0.f;
+    // viewport.width = static_cast<float>(_vk_swapchain_extent.width);
+    // viewport.height = static_cast<float>(_vk_swapchain_extent.height);
+    //
+    // // Range of depth values for the framebuffer
+    // viewport.minDepth = 0.f;
+    // viewport.maxDepth = 1.f;
+    //
+    // // Scissor rectangles define which regions of pixels will be discarded in the framebuffer
+    // VkRect2D scissor{};
+    // scissor.offset = {0, 0};
+    // scissor.extent = _vk_swapchain_extent;
+
+    VkPipelineViewportStateCreateInfo viewport_state{};
+    viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.scissorCount = 1;
+    // viewport_state.pViewports = &viewport;
+    // viewport_state.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+
+    // Clamp fragments beyond znear and zfar instead of discarding them
+    rasterizer.depthClampEnable = VK_FALSE;
+
+    rasterizer.rasterizerDiscardEnable = VK_FALSE; // VK_TRUE disables any output to the fb
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL; // How fragments are generated for geometry
+    rasterizer.lineWidth = 1.f; // Thickness of lines (number of fragments)
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; // Type of culling to be used
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE; // Vertex order for faces
+
+    // Which cosntants to use for altering depth values
+    rasterizer.depthBiasEnable = VK_FALSE;
+    // rasterizer.depthBiasConstantFactor = 0.f;
+    // rasterizer.depthBiasClamp = 0.f;
+    // rasterizer.depthBiasSlopeFactor = 0.f;
+
+    // Anti-aliasing with multisampling
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    // multisampling.minSampleShading = 1.f;
+    // multisampling.pSampleMask = nullptr;
+    // multisampling.alphaToCoverageEnable = VK_FALSE;
+    // multisampling.alphaToOneEnable = VK_FALSE;
+
+    // No depth/stencil buffer for now
+    // VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+
+    // Color blending configuration per attached framebuffer
+    VkPipelineColorBlendAttachmentState color_blend_attachment{};
+    color_blend_attachment.colorWriteMask =
+      VK_COLOR_COMPONENT_R_BIT |
+      VK_COLOR_COMPONENT_G_BIT |
+      VK_COLOR_COMPONENT_B_BIT |
+      VK_COLOR_COMPONENT_A_BIT;
+    color_blend_attachment.blendEnable = VK_FALSE;
+    // color_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+    // color_blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+    // color_blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+    // color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    // color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    // color_blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    
+    // For alpha blending:
+    // color_blend_attachment.blendEnable = VK_TRUE;
+    // color_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // color_blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    // color_blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+    // color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    // color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    // color_blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    // Global color blending settings
+    VkPipelineColorBlendStateCreateInfo color_blending{};
+    color_blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blending.logicOpEnable = VK_FALSE;
+    // color_blending.logicOp = VK_LOGIC_OP_COPY;
+    color_blending.attachmentCount = 1;
+    color_blending.pAttachments = &color_blend_attachment;
+    // color_blending.blendConstants[0] = 0.f;
+    // color_blending.blendConstants[1] = 0.f;
+    // color_blending.blendConstants[2] = 0.f;
+    // color_blending.blendConstants[3] = 0.f;
+
+    // Layout for shader uniforms
+    VkPipelineLayoutCreateInfo pipeline_layout{};
+    pipeline_layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    // pipeline_layout.setLayoutCount = 0;
+    // pipeline_layout.pSetLayouts = nullptr;
+    // pipeline_layout.pushConstantRangeCount = 0;
+    // pipeline_layout.pPushConstantRanges= nullptr;
+
+    if (vkCreatePipelineLayout(_vk_device, &pipeline_layout, nullptr, &_vk_pipeline_layout)
+        != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create pipeline layout"};
+    }
+
+    VkGraphicsPipelineCreateInfo pipeline{};
+    pipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline.stageCount = 2;
+    pipeline.pStages = shader_stages;
+    pipeline.pVertexInputState = &vertex_input;
+    pipeline.pInputAssemblyState = &input_assembly;
+    pipeline.pViewportState = &viewport_state;
+    pipeline.pRasterizationState = &rasterizer;
+    pipeline.pMultisampleState = &multisampling;
+    // pipeline.pDepthStencilState = nullptr;
+    pipeline.pColorBlendState = &color_blending;
+    pipeline.pDynamicState = &dynamic_state;
+    pipeline.layout = _vk_pipeline_layout;
+    pipeline.renderPass = _vk_render_pass;
+    pipeline.subpass = 0; // Index of the subpass where this pipeline will be used
+
+    // For deriving from another pipeline
+    // pipeline.basePipelineHandle = VK_NULL_HANDLE;
+    // pipeline.basePipelineIndex = -1;
+
+    // Can take multiple VkGraphicsPipelineCreateInfo objects
+    // and create multiple VkPipeline objects in a single call
+    if (vkCreateGraphicsPipelines(_vk_device, VK_NULL_HANDLE, 1, &pipeline, nullptr, 
+                                  &_vk_pipeline) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create graphics pipeline"};
+    }
+
+    vkDestroyShaderModule(_vk_device, vert_module, nullptr);
+    vkDestroyShaderModule(_vk_device, frag_module, nullptr);
   }
 
 
@@ -673,6 +944,10 @@ private:
   VkSwapchainKHR _vk_swapchain;
   std::vector<VkImage> _vk_swapchain_images;
   std::vector<VkImageView> _vk_swapchain_image_views;
+
+  VkRenderPass _vk_render_pass;
+  VkPipelineLayout _vk_pipeline_layout;
+  VkPipeline _vk_pipeline;
 };
 
 int main() {
