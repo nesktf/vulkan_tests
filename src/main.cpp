@@ -1135,11 +1135,11 @@ private:
     submit.waitSemaphoreCount = 1;
     submit.pWaitSemaphores = wait_semaphores;
     submit.pWaitDstStageMask = wait_stages;
-    submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &_vk_command_buffer;
 
     // Which semaphores to signal when the command buffer finishes execution
     VkSemaphore signal_semaphores[] = {_vk_render_finished_semaphore};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &_vk_command_buffer;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = signal_semaphores;
 
