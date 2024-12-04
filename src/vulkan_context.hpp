@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
@@ -15,7 +16,7 @@ concept vk_surface_factory = std::is_invocable_r_v<bool, F, VkInstance, VkSurfac
 class vk_context {
 private:
   // Allow to render up to N frames without waiting for the next frame
-  static constexpr std::size_t MAX_FRAMES_IN_FLIGHT = 2;
+  static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
   struct queue_family_indices {
     std::optional<uint32_t> graphics_family;
@@ -41,14 +42,14 @@ public:
 
   template<vk_surface_factory Fun>
   void create_surface(Fun&& surface_factory) {
-    if (surface_factory(_vk_instance, &_vk_surface)) {
+    if (surface_factory(_instance, &_surface)) {
       throw std::runtime_error{"Failed to create window surface"};
     }
   }
 
   void pick_physical_device();
   void create_logical_device();
-  void create_swapchain(std::size_t fb_width, std::size_t fb_height);
+  void create_swapchain(std::function<void(std::size_t&, std::size_t&)> size_callback = {});
   void create_imageviews();
 
   // Context render configuration
@@ -64,7 +65,7 @@ public:
   void wait_idle();
 
   // Context dynamic settings
-  void resize_framebuffer(std::size_t width, std::size_t height);
+  void flag_dirty_framebuffer() { _framebuffer_resized = true; }
 
   // Destruction
   void destroy();
@@ -80,39 +81,37 @@ private:
     void* user_data
   );
 
-  void _record_command_buffer(VkCommandBuffer buffer, uint32_t image_index);
+  void _cleanup_swapchain();
+  void _recreate_swapchain();
 
 private:
-  bool _vk_enable_layers;
-  VkInstance _vk_instance;
-  VkDebugUtilsMessengerEXT _vk_messenger;
+  bool _enable_layers;
+  VkInstance _instance;
+  VkDebugUtilsMessengerEXT _messenger;
 
-  VkSurfaceKHR _vk_surface;
-  VkPhysicalDevice _vk_physicaldevice;
-  VkDevice _vk_device;
-  VkQueue _vk_graphicsqueue, _vk_presentqueue;
+  VkSurfaceKHR _surface;
+  VkPhysicalDevice _physical_device;
+  VkDevice _device;
+  VkQueue _graphics_queue, _present_queue;
 
-  VkFormat _vk_swapchain_format;
-  VkExtent2D _vk_swapchain_extent;
-  VkSwapchainKHR _vk_swapchain;
-  std::vector<VkImage> _vk_swapchain_images;
-  std::vector<VkImageView> _vk_swapchain_imageviews;
-  std::vector<VkFramebuffer> _vk_swapchain_framebuffers;
-  bool _vk_framebuffer_resized{false};
-  std::size_t _vk_framebuffer_width{0}, _vk_framebuffer_height{0}; // For window resizing
+  VkFormat _swapchain_format;
+  VkExtent2D _swapchain_extent;
+  VkSwapchainKHR _swapchain;
+  std::vector<VkImage> _swapchain_images;
+  std::vector<VkImageView> _swapchain_image_views;
+  std::vector<VkFramebuffer> _swapchain_framebuffers;
+  std::function<void(std::size_t&, std::size_t&)> _framebuffer_size_callback;
+  bool _framebuffer_resized{false};
 
-  VkRenderPass _vk_renderpass;
-  VkPipelineLayout _vk_graphicspipeline_layout;
-  VkPipeline _vk_graphicspipeline;
+  VkRenderPass _render_pass;
+  VkPipelineLayout _graphics_pipeline_layout;
+  VkPipeline _graphics_pipeline;
 
-  VkCommandPool _vk_commandpool;
-  std::vector<VkCommandBuffer> _vk_commandbuffers;
-  std::vector<VkSemaphore> _vk_image_avail_semaphores, _vk_render_finish_semaphores;
-  std::vector<VkFence> _vk_in_flight_fences;
-  uint32_t _vk_curr_frame{0};
-  // VkCommandBuffer _vk_commandbuffer;
-  // VkSemaphore _vk_image_avail_semaphore, _vk_render_finish_semaphore;
-  // VkFence _vk_in_flight_fence;
+  VkCommandPool _command_pool;
+  std::vector<VkCommandBuffer> _command_buffers;
+  std::vector<VkSemaphore> _image_avail_semaphores, _render_finish_semaphores;
+  std::vector<VkFence> _in_flight_fences;
+  uint32_t _curr_frame{0};
 };
 
 } // namespace ntf

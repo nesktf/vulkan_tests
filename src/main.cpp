@@ -75,9 +75,12 @@ int main() {
 
     context.create_logical_device();
 
-    int w{0}, h{0}; // Not the same as WIDTH, HEIGHT in high DPI screens
-    glfwGetFramebufferSize(win, &w, &h);
-    context.create_swapchain(static_cast<std::size_t>(w), static_cast<std::size_t>(h));
+    context.create_swapchain([win](std::size_t& width, std::size_t& height) {
+      int w{0}, h{0}; // Not the same as WIDTH, HEIGHT in high DPI screens
+      glfwGetFramebufferSize(win, &w, &h);
+      width = static_cast<std::size_t>(w);
+      height = static_cast<std::size_t>(h);
+    });
 
     context.create_imageviews();
 
@@ -94,6 +97,12 @@ int main() {
     context.create_commandbuffers();
 
     context.create_sync_objects();
+    glfwSetWindowUserPointer(win, &context);
+
+    glfwSetFramebufferSizeCallback(win, +[](GLFWwindow* win, int, int) {
+      auto ctx = reinterpret_cast<ntf::vk_context*>(glfwGetWindowUserPointer(win));
+      ctx->flag_dirty_framebuffer();
+    });
 
     while (!glfwWindowShouldClose(win)) {
       glfwPollEvents();
