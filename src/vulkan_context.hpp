@@ -33,6 +33,7 @@ public:
   vk_context() = default;
   
 public:
+  // Context initialization
   void create_instance(bool enable_layers, const std::vector<const char*>& req_ext);
 
   template<vk_surface_factory Fun>
@@ -45,23 +46,25 @@ public:
   void pick_physical_device();
   void create_logical_device();
   void create_swapchain(std::size_t fb_width, std::size_t fb_height);
-
   void create_imageviews();
+
+  // Context render configuration
   void create_renderpass();
-
   void create_graphics_pipeline(std::string_view vert_src, std::string_view frag_src);
-
   void create_framebuffers();
   void create_commandpool();
   void create_commandbuffer();
   void create_sync_objects();
 
+  // Context rendering
   void draw_frame();
   void wait_idle();
 
-  void destroy();
-
+  // Context dynamic settings
   void resize_framebuffer(std::size_t width, std::size_t height);
+
+  // Destruction
+  void destroy();
 
 private:
   queue_family_indices _find_queue_families(VkPhysicalDevice device);
