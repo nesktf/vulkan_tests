@@ -91,7 +91,7 @@ int main() {
     context.create_framebuffers();
 
     context.create_commandpool();
-    context.create_commandbuffer();
+    context.create_commandbuffers();
 
     context.create_sync_objects();
 

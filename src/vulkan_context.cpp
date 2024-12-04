@@ -840,19 +840,21 @@ void vk_context::create_commandpool() {
   }
 }
 
-void vk_context::create_commandbuffer() {
+void vk_context::create_commandbuffers() {
   // Command buffer allocation
+
+  _vk_commandbuffers.resize(MAX_FRAMES_IN_FLIGHT);
 
   VkCommandBufferAllocateInfo alloc{};
   alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
   alloc.commandPool = _vk_commandpool;
-  alloc.commandBufferCount = 1;
+  alloc.commandBufferCount = static_cast<uint32_t>(_vk_commandbuffers.size());
 
   // If the command buffer can be submited directly but not called from other buffers
   // or cannot be submitted directly but can be called from pirmary buffers
   alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
-  if (vkAllocateCommandBuffers(_vk_device, &alloc, &_vk_commandbuffer) != VK_SUCCESS) {
+  if (vkAllocateCommandBuffers(_vk_device, &alloc, _vk_commandbuffers.data()) != VK_SUCCESS) {
     throw std::runtime_error{"Failed to allocate command buffers"};
   }
 }
@@ -874,6 +876,10 @@ void vk_context::create_sync_objects() {
   // Fences are used when we're waiting for the previous frame to end before drawing again, so
   // we don't overwrite the current contents of the command buffer while the GPU is using it
 
+  _vk_image_avail_semaphores.resize(MAX_FRAMES_IN_FLIGHT);
+  _vk_render_finish_semaphores.resize(MAX_FRAMES_IN_FLIGHT);
+  _vk_in_flight_fences.resize(MAX_FRAMES_IN_FLIGHT);
+
   VkSemaphoreCreateInfo semaphore{};
   semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -883,25 +889,23 @@ void vk_context::create_sync_objects() {
   // Create the fence signaled, since there is no previous frame on the first frame
   fence.flags = VK_FENCE_CREATE_SIGNALED_BIT; 
 
-  if (vkCreateSemaphore(_vk_device, &semaphore, nullptr, &_vk_image_avail_semaphore)
-      != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to create first semaphore"};
-  }
-
-  if (vkCreateSemaphore(_vk_device, &semaphore, nullptr, &_vk_render_finish_semaphore)
-      != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to create second semaphore"};
-  }
-
-  if (vkCreateFence(_vk_device, &fence, nullptr, &_vk_in_flight_fence) != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to create fence"};
+  for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    if (vkCreateSemaphore(_vk_device, &semaphore, nullptr, &_vk_image_avail_semaphores[i]) 
+                        != VK_SUCCESS ||
+        vkCreateSemaphore(_vk_device, &semaphore, nullptr, &_vk_render_finish_semaphores[i]) 
+                        != VK_SUCCESS ||
+        vkCreateFence(_vk_device, &fence, nullptr, &_vk_in_flight_fences[i]) != VK_SUCCESS) {
+      throw std::runtime_error{"Failed to create sync objects"};
+    }
   }
 }
 
 void vk_context::destroy() {
-  vkDestroySemaphore(_vk_device, _vk_image_avail_semaphore, nullptr);
-  vkDestroySemaphore(_vk_device, _vk_render_finish_semaphore, nullptr);
-  vkDestroyFence(_vk_device, _vk_in_flight_fence, nullptr);
+  for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    vkDestroySemaphore(_vk_device, _vk_image_avail_semaphores[i], nullptr);
+    vkDestroySemaphore(_vk_device, _vk_render_finish_semaphores[i], nullptr);
+    vkDestroyFence(_vk_device, _vk_in_flight_fences[i], nullptr);
+  }
 
   vkDestroyCommandPool(_vk_device, _vk_commandpool, nullptr); // Cleans up the buffer too
   
@@ -986,21 +990,21 @@ void vk_context::_record_command_buffer(VkCommandBuffer buffer, uint32_t image_i
 
 void vk_context::draw_frame() {
   // Wait for 1 fence without timeout
-  vkWaitForFences(_vk_device, 1, &_vk_in_flight_fence, VK_TRUE, UINT64_MAX);
+  vkWaitForFences(_vk_device, 1, &_vk_in_flight_fences[_vk_curr_frame], VK_TRUE, UINT64_MAX);
 
   // Reset 1 fence
-  vkResetFences(_vk_device, 1, &_vk_in_flight_fence);
+  vkResetFences(_vk_device, 1, &_vk_in_flight_fences[_vk_curr_frame]);
 
   // Acquire the next image without a timeout, pass a semaphore only
   uint32_t image_index{0};
-  vkAcquireNextImageKHR(_vk_device, _vk_swapchain, UINT64_MAX, _vk_image_avail_semaphore,
-                        VK_NULL_HANDLE, &image_index);
+  vkAcquireNextImageKHR(_vk_device, _vk_swapchain, UINT64_MAX, 
+                        _vk_image_avail_semaphores[_vk_curr_frame], VK_NULL_HANDLE, &image_index);
 
   // Make sure the buffer is able to be recorded, the seccond arg is some flag
-  vkResetCommandBuffer(_vk_commandbuffer, 0);
+  vkResetCommandBuffer(_vk_commandbuffers[_vk_curr_frame], 0);
 
   // Record things
-  _record_command_buffer(_vk_commandbuffer, image_index);
+  _record_command_buffer(_vk_commandbuffers[_vk_curr_frame], image_index);
 
   // Now to submit the queue
   VkSubmitInfo submit{};
@@ -1009,19 +1013,20 @@ void vk_context::draw_frame() {
   // Wait with ONLY writing colors to the image until it's available
   // This means that the implementation COULD start executing the vertex shader for example
   VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-  VkSemaphore wait_semaphores[] = {_vk_image_avail_semaphore};
+  VkSemaphore wait_semaphores[] = {_vk_image_avail_semaphores[_vk_curr_frame]};
   submit.waitSemaphoreCount = 1;
   submit.pWaitSemaphores = wait_semaphores;
   submit.pWaitDstStageMask = wait_stages;
 
   // Which semaphores to signal when the command buffer finishes execution
-  VkSemaphore signal_semaphores[] = {_vk_render_finish_semaphore};
+  VkSemaphore signal_semaphores[] = {_vk_render_finish_semaphores[_vk_curr_frame]};
   submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &_vk_commandbuffer;
+  submit.pCommandBuffers = &_vk_commandbuffers[_vk_curr_frame];
   submit.signalSemaphoreCount = 1;
   submit.pSignalSemaphores = signal_semaphores;
 
-  if (vkQueueSubmit(_vk_graphicsqueue, 1, &submit, _vk_in_flight_fence) != VK_SUCCESS) {
+  if (vkQueueSubmit(_vk_graphicsqueue, 1, &submit, _vk_in_flight_fences[_vk_curr_frame])
+      != VK_SUCCESS) {
     throw std::runtime_error{"Failed to submit draw command buffer"};
   }
 
@@ -1037,6 +1042,8 @@ void vk_context::draw_frame() {
   // present.pResults = nullptr;
 
   vkQueuePresentKHR(_vk_presentqueue, &present);
+
+  _vk_curr_frame = (_vk_curr_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void vk_context::wait_idle() {

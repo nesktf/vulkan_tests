@@ -14,6 +14,9 @@ concept vk_surface_factory = std::is_invocable_r_v<bool, F, VkInstance, VkSurfac
 
 class vk_context {
 private:
+  // Allow to render up to N frames without waiting for the next frame
+  static constexpr std::size_t MAX_FRAMES_IN_FLIGHT = 2;
+
   struct queue_family_indices {
     std::optional<uint32_t> graphics_family;
     std::optional<uint32_t> present_family;
@@ -53,7 +56,7 @@ public:
   void create_graphics_pipeline(std::string_view vert_src, std::string_view frag_src);
   void create_framebuffers();
   void create_commandpool();
-  void create_commandbuffer();
+  void create_commandbuffers();
   void create_sync_objects();
 
   // Context rendering
@@ -103,9 +106,13 @@ private:
   VkPipeline _vk_graphicspipeline;
 
   VkCommandPool _vk_commandpool;
-  VkCommandBuffer _vk_commandbuffer;
-  VkSemaphore _vk_image_avail_semaphore, _vk_render_finish_semaphore;
-  VkFence _vk_in_flight_fence;
+  std::vector<VkCommandBuffer> _vk_commandbuffers;
+  std::vector<VkSemaphore> _vk_image_avail_semaphores, _vk_render_finish_semaphores;
+  std::vector<VkFence> _vk_in_flight_fences;
+  uint32_t _vk_curr_frame{0};
+  // VkCommandBuffer _vk_commandbuffer;
+  // VkSemaphore _vk_image_avail_semaphore, _vk_render_finish_semaphore;
+  // VkFence _vk_in_flight_fence;
 };
 
 } // namespace ntf
