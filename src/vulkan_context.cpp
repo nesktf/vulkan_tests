@@ -291,6 +291,16 @@ auto vk_context::_find_queue_families(VkPhysicalDevice device) -> queue_family_i
       indices.graphics_family = i;
     }
 
+    // The same but for transfers
+    if (family.queueFlags & VK_QUEUE_TRANSFER_BIT) {
+      indices.transfer_family = i;
+    }
+
+    // if ((family.queueFlags & VK_QUEUE_TRANSFER_BIT) && 
+    //   !(family.queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+    //   indices.transfer_family = i;
+    // }
+
     // Require a device with a queue family that supports presentation
     // (might not be the same queue as the graphics one, so we store another index)
     VkBool32 present_support{false};
@@ -387,7 +397,8 @@ void vk_context::create_logical_device() {
 
   std::vector<VkDeviceQueueCreateInfo> queue_infos;
   std::set<uint32_t> unique_queue_families = { 
-    indices.graphics_family.value(), indices.present_family.value()
+    indices.graphics_family.value(), indices.present_family.value(), 
+    indices.transfer_family.value(),
   }; // To avoid adding the same queue family more than once
 
 
@@ -431,6 +442,7 @@ void vk_context::create_logical_device() {
   // index 0 for both
   vkGetDeviceQueue(_device, indices.graphics_family.value(), 0, &_graphics_queue); 
   vkGetDeviceQueue(_device, indices.present_family.value(), 0, &_present_queue);
+  vkGetDeviceQueue(_device, indices.transfer_family.value(), 0, &_transfer_queue);
 }
 
 void vk_context::create_swapchain(std::function<void(std::size_t&, std::size_t&)> size_callback) {
@@ -885,12 +897,19 @@ void vk_context::create_commandpool() {
   // All command buffers can be rerecorded individually
   pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
-  if (vkCreateCommandPool(_device, &pool, nullptr, &_command_pool) != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to create command pool"};
+  if (vkCreateCommandPool(_device, &pool, nullptr, &_graphics_command_pool) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to create graphics command pool"};
+  }
+
+  pool.queueFamilyIndex = indices.transfer_family.value();
+  if (vkCreateCommandPool(_device, &pool, nullptr, &_transfer_command_pool) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to create transfer command pool"};
   }
 }
 
-void vk_context::create_vertex_buffer() {
+void vk_context::_create_buffer(VkDeviceSize size, VkBufferUsageFlags usage, 
+                                VkMemoryPropertyFlags props, VkBuffer& buffer,
+                                VkDeviceMemory& buffer_mem) {
   // Find an appropiate type of memory to use with some properties
   // The type of memory varies on its allowed operations and performance when using
   auto find_memory_type = [this](uint32_t type_filter, VkMemoryPropertyFlags props) -> uint32_t {
@@ -906,59 +925,139 @@ void vk_context::create_vertex_buffer() {
     throw std::runtime_error{"Failed to find suitable memory type"};
   };
 
-  // Configure a vertex buffer
-  VkBufferCreateInfo buffer{};
-  buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  buffer.size = sizeof(ntf::vertex) * vertices.size();
-  buffer.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // Can be multiple types of buffer at once
-  buffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Owned by a specifig queue family
+  // Configure the buffer
+  VkBufferCreateInfo buff_info{};
+  buff_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  buff_info.size = size;
+  buff_info.usage = usage;
 
-  if (vkCreateBuffer(_device, &buffer, nullptr, &_vertex_buffer) != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to create vertex buffer"};
+  auto indices = _find_queue_families(_physical_device);
+  uint32_t queue_indices[] = {indices.graphics_family.value(), indices.transfer_family.value()};
+  if (indices.graphics_family != indices.transfer_family) {
+    buff_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+    buff_info.queueFamilyIndexCount = 2;
+    buff_info.pQueueFamilyIndices = queue_indices;
+  } else {
+    // Needed if not using a single queue
+    buff_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE; 
+  }
+
+  if (vkCreateBuffer(_device, &buff_info, nullptr, &buffer) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to create buffer"};
   }
 
   // Assignate memory to the buffer
   VkMemoryRequirements mem_req;
-  vkGetBufferMemoryRequirements(_device, _vertex_buffer, &mem_req);
+  vkGetBufferMemoryRequirements(_device, buffer, &mem_req);
 
-  VkMemoryAllocateInfo alloc{};
-  alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  alloc.allocationSize = mem_req.size;
-  alloc.memoryTypeIndex = find_memory_type(
-    mem_req.memoryTypeBits,
-    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-  );
+  VkMemoryAllocateInfo alloc_info{};
+  alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  alloc_info.allocationSize = mem_req.size;
+  alloc_info.memoryTypeIndex = find_memory_type(mem_req.memoryTypeBits, props);
 
-  if (vkAllocateMemory(_device, &alloc, nullptr, &_vertex_buffer_mem) != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to allocate vertex buffer memory"};
+  if (vkAllocateMemory(_device, &alloc_info, nullptr, &buffer_mem) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to allocate buffer memory"};
   }
 
-  vkBindBufferMemory(_device, _vertex_buffer, _vertex_buffer_mem, 0);
+  vkBindBufferMemory(_device, buffer, buffer_mem, 0);
+}
 
+void vk_context::_copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize sz) {
+  VkCommandBufferBeginInfo begin_info{};
+  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+  vkBeginCommandBuffer(_transfer_command_buffer, &begin_info);
+
+  VkBufferCopy copy_region{};
+  copy_region.srcOffset = 0;
+  copy_region.dstOffset = 0;
+  copy_region.size = sz;
+  vkCmdCopyBuffer(_transfer_command_buffer, src, dst, 1, &copy_region);
+
+  vkEndCommandBuffer(_transfer_command_buffer);
+
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &_transfer_command_buffer;
+
+  vkQueueSubmit(_transfer_queue, 1, &submit, VK_NULL_HANDLE);
+  vkQueueWaitIdle(_transfer_queue);
+}
+
+void vk_context::create_vertex_buffer() {
+  VkDeviceSize buffer_sz = sizeof(vertices[0])*vertices.size();
+
+  // Without staging buffer
+  // _create_buffer(
+  //   buffer_sz,
+  //   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+  //   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+  //   _vertex_buffer,
+  //   _vertex_buffer_mem
+  // );
+  //
+  // // Copy the vertex data
+  // void* data;
+  // vkMapMemory(_device, _vertex_buffer_mem, 0, buffer_sz, 0, &data);
+  // std::memcpy(data, vertices.data(), static_cast<std::size_t>(buffer_sz));
+  // vkUnmapMemory(_device, _vertex_buffer_mem);
+
+  // With staging buffer
+  VkBuffer staging_buffer;
+  VkDeviceMemory staging_buffer_mem;
+  _create_buffer(
+    buffer_sz,
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    staging_buffer,
+    staging_buffer_mem
+  );
 
   // Copy the vertex data
   void* data;
-  vkMapMemory(_device, _vertex_buffer_mem, 0, buffer.size, 0, &data);
-  std::memcpy(data, vertices.data(), static_cast<std::size_t>(buffer.size));
-  vkUnmapMemory(_device, _vertex_buffer_mem);
+  vkMapMemory(_device, staging_buffer_mem, 0, buffer_sz, 0, &data);
+  std::memcpy(data, vertices.data(), static_cast<std::size_t>(buffer_sz));
+  vkUnmapMemory(_device, staging_buffer_mem);
+
+  _create_buffer(
+    buffer_sz,
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    _vertex_buffer,
+    _vertex_buffer_mem
+  );
+
+  _copy_buffer(staging_buffer, _vertex_buffer, buffer_sz);
+
+  vkDestroyBuffer(_device, staging_buffer, nullptr);
+  vkFreeMemory(_device, staging_buffer_mem, nullptr);
 }
 
 void vk_context::create_commandbuffers() {
   // Command buffer allocation
 
-  _command_buffers.resize(MAX_FRAMES_IN_FLIGHT);
+  _graphics_command_buffers.resize(MAX_FRAMES_IN_FLIGHT);
 
   VkCommandBufferAllocateInfo alloc{};
   alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  alloc.commandPool = _command_pool;
+  alloc.commandPool = _graphics_command_pool;
   alloc.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
 
   // If the command buffer can be submited directly but not called from other buffers
   // or cannot be submitted directly but can be called from pirmary buffers
   alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
-  if (vkAllocateCommandBuffers(_device, &alloc, _command_buffers.data()) != VK_SUCCESS) {
-    throw std::runtime_error{"Failed to allocate command buffers"};
+  if (vkAllocateCommandBuffers(_device, &alloc, _graphics_command_buffers.data()) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to allocate graphics command buffers"};
+  }
+
+  alloc.commandPool = _transfer_command_pool;
+  alloc.commandBufferCount = 1;
+
+  if (vkAllocateCommandBuffers(_device, &alloc, &_transfer_command_buffer) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to allocate transfer command buffer"};
   }
 }
 
@@ -1037,7 +1136,8 @@ void vk_context::destroy() {
     vkDestroyFence(_device, _in_flight_fences[i], nullptr);
   }
 
-  vkDestroyCommandPool(_device, _command_pool, nullptr); // Cleans up the buffer too 
+  vkDestroyCommandPool(_device, _transfer_command_pool, nullptr); // Cleans up the buffer too 
+  vkDestroyCommandPool(_device, _graphics_command_pool, nullptr); // Cleans up the buffer too 
 
   vkDestroyPipeline(_device, _graphics_pipeline, nullptr);
   vkDestroyPipelineLayout(_device, _graphics_pipeline_layout, nullptr);
@@ -1137,10 +1237,10 @@ void vk_context::draw_frame() {
   vkResetFences(_device, 1, &_in_flight_fences[_curr_frame]);
 
   // Make sure the buffer is able to be recorded, the seccond arg is some flag
-  vkResetCommandBuffer(_command_buffers[_curr_frame], 0);
+  vkResetCommandBuffer(_graphics_command_buffers[_curr_frame], 0);
 
   // Record things
-  record_buffer(_command_buffers[_curr_frame], image_index);
+  record_buffer(_graphics_command_buffers[_curr_frame], image_index);
 
   // Now to submit the queue
   VkSubmitInfo submit{};
@@ -1157,7 +1257,7 @@ void vk_context::draw_frame() {
   // Which semaphores to signal when the command buffer finishes execution
   VkSemaphore signal_semaphores[] = {_render_finish_semaphores[_curr_frame]};
   submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &_command_buffers[_curr_frame];
+  submit.pCommandBuffers = &_graphics_command_buffers[_curr_frame];
   submit.signalSemaphoreCount = 1;
   submit.pSignalSemaphores = signal_semaphores;
 

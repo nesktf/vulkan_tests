@@ -33,6 +33,7 @@ private:
   struct queue_family_indices {
     std::optional<uint32_t> graphics_family;
     std::optional<uint32_t> present_family;
+    std::optional<uint32_t> transfer_family;
 
     bool is_complete() const { 
       return graphics_family.has_value() && present_family.has_value();
@@ -96,6 +97,9 @@ private:
 
   void _cleanup_swapchain();
   void _recreate_swapchain();
+  void _create_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props,
+                      VkBuffer& buffer, VkDeviceMemory& buffer_mem);
+  void _copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize sz);
 
 private:
   bool _enable_layers;
@@ -105,7 +109,7 @@ private:
   VkSurfaceKHR _surface;
   VkPhysicalDevice _physical_device;
   VkDevice _device;
-  VkQueue _graphics_queue, _present_queue;
+  VkQueue _graphics_queue, _present_queue, _transfer_queue;
 
   VkFormat _swapchain_format;
   VkExtent2D _swapchain_extent;
@@ -120,8 +124,9 @@ private:
   VkPipelineLayout _graphics_pipeline_layout;
   VkPipeline _graphics_pipeline;
 
-  VkCommandPool _command_pool;
-  std::vector<VkCommandBuffer> _command_buffers;
+  VkCommandPool _graphics_command_pool, _transfer_command_pool;
+  VkCommandBuffer _transfer_command_buffer;
+  std::vector<VkCommandBuffer> _graphics_command_buffers;
   std::vector<VkSemaphore> _image_avail_semaphores, _render_finish_semaphores;
   std::vector<VkFence> _in_flight_fences;
   uint32_t _curr_frame{0};
