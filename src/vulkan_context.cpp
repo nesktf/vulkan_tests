@@ -297,14 +297,14 @@ auto vk_context::_find_queue_families(VkPhysicalDevice device) -> queue_family_i
     }
 
     // The same but for transfers
-    if (family.queueFlags & VK_QUEUE_TRANSFER_BIT) {
-      indices.transfer_family = i;
-    }
-
-    // if ((family.queueFlags & VK_QUEUE_TRANSFER_BIT) && 
-    //   !(family.queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+    // if (family.queueFlags & VK_QUEUE_TRANSFER_BIT) {
     //   indices.transfer_family = i;
     // }
+
+    if ((family.queueFlags & VK_QUEUE_TRANSFER_BIT) && 
+      !(family.queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+      indices.transfer_family = i;
+    }
 
     // Require a device with a queue family that supports presentation
     // (might not be the same queue as the graphics one, so we store another index)
