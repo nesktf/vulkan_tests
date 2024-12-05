@@ -94,6 +94,7 @@ int main() {
     context.create_framebuffers();
 
     context.create_commandpool();
+    context.create_vertex_buffer();
     context.create_commandbuffers();
 
     context.create_sync_objects();

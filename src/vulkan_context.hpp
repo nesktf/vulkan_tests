@@ -7,8 +7,20 @@
 #include <stdexcept>
 #include <vector>
 #include <optional>
+#include <array>
+
+#include <glm/glm.hpp>
 
 namespace ntf {
+
+struct vertex {
+  glm::vec2 pos;
+  glm::vec3 color;
+
+  static VkVertexInputBindingDescription bind_description();
+  static std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions();
+};
+
 
 template<typename F>
 concept vk_surface_factory = std::is_invocable_r_v<bool, F, VkInstance, VkSurfaceKHR*>;
@@ -57,6 +69,7 @@ public:
   void create_graphics_pipeline(std::string_view vert_src, std::string_view frag_src);
   void create_framebuffers();
   void create_commandpool();
+  void create_vertex_buffer();
   void create_commandbuffers();
   void create_sync_objects();
 
@@ -112,6 +125,9 @@ private:
   std::vector<VkSemaphore> _image_avail_semaphores, _render_finish_semaphores;
   std::vector<VkFence> _in_flight_fences;
   uint32_t _curr_frame{0};
+
+  VkBuffer _vertex_buffer;
+  VkDeviceMemory _vertex_buffer_mem;
 };
 
 } // namespace ntf

@@ -2,12 +2,17 @@
 
 #include <fmt/format.h>
 
-#include <array>
 #include <set>
 #include <string>
 #include <algorithm>
 
 namespace {
+
+const std::vector<ntf::vertex> vertices = {
+  {{0.f, -.5f}, {1.f, 0.f, 0.f}},
+  {{.5f, .5f}, {0.f, 1.f, 0.f}},
+  {{-.5f, .5f}, {0.f, 0.f, 1.f}},
+};
 
 // Load vkCreateDebugUtilsMessengerEXT, since is an extension and is not loaded by default
 VkResult CreateDebugUtilsMessengerEXT(
@@ -88,6 +93,45 @@ bool check_extension_support(VkPhysicalDevice device) {
 } // namespace
 
 namespace ntf {
+
+VkVertexInputBindingDescription vertex::bind_description() {
+  // Describes at which rate to load data from memory
+  // through the vertices. Specifies the number of bytes between
+  // data entries, and whether to move to the next data entry after
+  // each vertex or instance (for instanced rendering)
+  VkVertexInputBindingDescription desc{};
+
+  desc.binding = 0; // Index in the array of bindings
+  desc.stride = sizeof(ntf::vertex);
+  desc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+  return desc;
+}
+
+std::array<VkVertexInputAttributeDescription, 2> vertex::attribute_descriptions() {
+  // Specifies the format for each attribute
+  std::array<VkVertexInputAttributeDescription, 2> attr;
+
+  // VK_FORMAT_R32_SFLOAT -> float; (32 bit floats)
+  // VK_FORMAT_R32G32_SFLOAT -> vec2;
+  // VK_FORMAT_R32G32B32_SFLOAT -> vec3;
+  // VK_FORMAT_R32G32B32A32_SFLOAT -> vec2;
+  // VK_FORMAT_R32G32_SINT -> ivec2; (32 bit signed integers)
+  // VK_FORMAT_R32G32B32A32_UINT ->uvec4; (32 bit unsigned integers)
+  // ...
+
+  attr[0].binding = 0; // From which binding the per-vertex data comes
+  attr[0].location = 0; // Location in the shader
+  attr[0].format = VK_FORMAT_R32G32_SFLOAT; // Type of the attribute
+  attr[0].offset = offsetof(ntf::vertex, pos);
+
+  attr[1].binding = 0;
+  attr[1].location = 1;
+  attr[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+  attr[1].offset = offsetof(ntf::vertex, color);
+
+  return attr;
+}
 
 VkBool32 vk_context::_vk_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT msg_severity,
@@ -652,10 +696,14 @@ void vk_context::create_graphics_pipeline(std::string_view vert_src, std::string
   // No vertex data for now
   VkPipelineVertexInputStateCreateInfo vertex_input{};
   vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-  vertex_input.vertexBindingDescriptionCount = 0;
-  vertex_input.pVertexBindingDescriptions = nullptr;
-  vertex_input.vertexAttributeDescriptionCount = 0;
-  vertex_input.pVertexAttributeDescriptions = nullptr;
+
+  auto bind_desc = vertex::bind_description();
+  auto attr_desc = vertex::attribute_descriptions();
+
+  vertex_input.vertexBindingDescriptionCount = 1;
+  vertex_input.pVertexBindingDescriptions = &bind_desc;
+  vertex_input.vertexAttributeDescriptionCount = static_cast<uint32_t>(attr_desc.size());
+  vertex_input.pVertexAttributeDescriptions = attr_desc.data();
 
   // Describe the primitive that will be used for drawing
   VkPipelineInputAssemblyStateCreateInfo input_assembly{};
@@ -842,6 +890,59 @@ void vk_context::create_commandpool() {
   }
 }
 
+void vk_context::create_vertex_buffer() {
+  // Find an appropiate type of memory to use with some properties
+  // The type of memory varies on its allowed operations and performance when using
+  auto find_memory_type = [this](uint32_t type_filter, VkMemoryPropertyFlags props) -> uint32_t {
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(_physical_device, &mem_props);
+
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+      if (type_filter & (1 << i) && ((mem_props.memoryTypes[i].propertyFlags & props) == props)) {
+        return i;
+      }
+    }
+
+    throw std::runtime_error{"Failed to find suitable memory type"};
+  };
+
+  // Configure a vertex buffer
+  VkBufferCreateInfo buffer{};
+  buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  buffer.size = sizeof(ntf::vertex) * vertices.size();
+  buffer.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // Can be multiple types of buffer at once
+  buffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Owned by a specifig queue family
+
+  if (vkCreateBuffer(_device, &buffer, nullptr, &_vertex_buffer) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to create vertex buffer"};
+  }
+
+  // Assignate memory to the buffer
+  VkMemoryRequirements mem_req;
+  vkGetBufferMemoryRequirements(_device, _vertex_buffer, &mem_req);
+
+  VkMemoryAllocateInfo alloc{};
+  alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  alloc.allocationSize = mem_req.size;
+  alloc.memoryTypeIndex = find_memory_type(
+    mem_req.memoryTypeBits,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  );
+
+  if (vkAllocateMemory(_device, &alloc, nullptr, &_vertex_buffer_mem) != VK_SUCCESS) {
+    throw std::runtime_error{"Failed to allocate vertex buffer memory"};
+  }
+
+  vkBindBufferMemory(_device, _vertex_buffer, _vertex_buffer_mem, 0);
+
+
+  // Copy the vertex data
+  void* data;
+  vkMapMemory(_device, _vertex_buffer_mem, 0, buffer.size, 0, &data);
+  std::memcpy(data, vertices.data(), static_cast<std::size_t>(buffer.size));
+  vkUnmapMemory(_device, _vertex_buffer_mem);
+}
+
 void vk_context::create_commandbuffers() {
   // Command buffer allocation
 
@@ -927,6 +1028,9 @@ void vk_context::_recreate_swapchain() {
 void vk_context::destroy() {
   _cleanup_swapchain();
 
+  vkDestroyBuffer(_device, _vertex_buffer, nullptr);
+  vkFreeMemory(_device, _vertex_buffer_mem, nullptr);
+
   for (std::size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
     vkDestroySemaphore(_device, _image_avail_semaphores[i], nullptr);
     vkDestroySemaphore(_device, _render_finish_semaphores[i], nullptr);
@@ -984,6 +1088,10 @@ void vk_context::draw_frame() {
     // VK_PIPELINE_BIND_POINT_GRAPHICS specifies that is a graphics pipeline (not a compute one)
     vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _graphics_pipeline);
 
+    VkBuffer vert_buffers[] = {_vertex_buffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(buffer, 0, 1, vert_buffers, offsets);
+
     // Set the dynamic states
     VkViewport viewport{};
     viewport.x = 0.f;
@@ -999,7 +1107,8 @@ void vk_context::draw_frame() {
     scissor.extent = _swapchain_extent;
     vkCmdSetScissor(buffer, 0, 1, &scissor); // firstScissor, scissorCount
 
-    vkCmdDraw(buffer, 3, 1, 0, 0); // vertexCount, instanceCount, firstVertex, firstInstance
+    vkCmdDraw(buffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    // vkCmdDraw(buffer, 3, 1, 0, 0); // vertexCount, instanceCount, firstVertex, firstInstance
     vkCmdEndRenderPass(buffer);
 
     if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
