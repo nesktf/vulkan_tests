@@ -98,7 +98,7 @@ int main() {
 
     context.create_sync_objects();
 
-    context.create_vertex_buffer();
+    context.create_buffers();
 
     glfwSetWindowUserPointer(win, &context);
 

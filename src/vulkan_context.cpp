@@ -9,9 +9,14 @@
 namespace {
 
 const std::vector<ntf::vertex> vertices = {
-  {{0.f, -.5f}, {1.f, 0.f, 0.f}},
-  {{.5f, .5f}, {0.f, 1.f, 0.f}},
-  {{-.5f, .5f}, {0.f, 0.f, 1.f}},
+  {{-.5f, -.5f}, {1.f, 0.f, 0.f}},
+  {{.5f, -.5f}, {0.f, 1.f, 0.f}},
+  {{.5f, .5f}, {0.f, 0.f, 1.f}},
+  {{-.5f, .5f}, {1.f, 1.f, 1.f}},
+};
+
+const std::vector<uint16_t> indices = {
+  0, 1, 2, 2, 3, 0,
 };
 
 // Load vkCreateDebugUtilsMessengerEXT, since is an extension and is not loaded by default
@@ -910,6 +915,8 @@ void vk_context::create_commandpool() {
 void vk_context::_create_buffer(VkDeviceSize size, VkBufferUsageFlags usage, 
                                 VkMemoryPropertyFlags props, VkBuffer& buffer,
                                 VkDeviceMemory& buffer_mem) {
+  // TODO: Use a proper allocator
+  
   // Find an appropiate type of memory to use with some properties
   // The type of memory varies on its allowed operations and performance when using
   auto find_memory_type = [this](uint32_t type_filter, VkMemoryPropertyFlags props) -> uint32_t {
@@ -986,8 +993,9 @@ void vk_context::_copy_buffer(VkBuffer src, VkBuffer dst, VkDeviceSize sz) {
   vkQueueWaitIdle(_transfer_queue);
 }
 
-void vk_context::create_vertex_buffer() {
-  VkDeviceSize buffer_sz = sizeof(vertices[0])*vertices.size();
+void vk_context::create_buffers() {
+  VkDeviceSize vert_sz = sizeof(vertices[0])*vertices.size();
+  VkDeviceSize indx_sz = sizeof(indices[0])*indices.size();
 
   // Without staging buffer
   // _create_buffer(
@@ -1008,7 +1016,7 @@ void vk_context::create_vertex_buffer() {
   VkBuffer staging_buffer;
   VkDeviceMemory staging_buffer_mem;
   _create_buffer(
-    buffer_sz,
+    vert_sz,
     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
     staging_buffer,
@@ -1017,19 +1025,44 @@ void vk_context::create_vertex_buffer() {
 
   // Copy the vertex data
   void* data;
-  vkMapMemory(_device, staging_buffer_mem, 0, buffer_sz, 0, &data);
-  std::memcpy(data, vertices.data(), static_cast<std::size_t>(buffer_sz));
+  vkMapMemory(_device, staging_buffer_mem, 0, vert_sz, 0, &data);
+  std::memcpy(data, vertices.data(), static_cast<std::size_t>(vert_sz));
   vkUnmapMemory(_device, staging_buffer_mem);
 
   _create_buffer(
-    buffer_sz,
+    vert_sz,
     VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     _vertex_buffer,
     _vertex_buffer_mem
   );
 
-  _copy_buffer(staging_buffer, _vertex_buffer, buffer_sz);
+  _copy_buffer(staging_buffer, _vertex_buffer, vert_sz);
+
+  vkDestroyBuffer(_device, staging_buffer, nullptr);
+  vkFreeMemory(_device, staging_buffer_mem, nullptr);
+
+  _create_buffer(
+    indx_sz,
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+    staging_buffer,
+    staging_buffer_mem
+  );
+
+  vkMapMemory(_device, staging_buffer_mem, 0, indx_sz, 0, &data);
+  std::memcpy(data, indices.data(), static_cast<std::size_t>(indx_sz));
+  vkUnmapMemory(_device, staging_buffer_mem);
+
+  _create_buffer(
+    indx_sz,
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    _index_buffer,
+    _index_buffer_mem
+  );
+
+  _copy_buffer(staging_buffer, _index_buffer, indx_sz);
 
   vkDestroyBuffer(_device, staging_buffer, nullptr);
   vkFreeMemory(_device, staging_buffer_mem, nullptr);
@@ -1127,6 +1160,9 @@ void vk_context::_recreate_swapchain() {
 void vk_context::destroy() {
   _cleanup_swapchain();
 
+  vkDestroyBuffer(_device, _index_buffer, nullptr);
+  vkFreeMemory(_device, _index_buffer_mem, nullptr);
+
   vkDestroyBuffer(_device, _vertex_buffer, nullptr);
   vkFreeMemory(_device, _vertex_buffer_mem, nullptr);
 
@@ -1192,6 +1228,8 @@ void vk_context::draw_frame() {
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(buffer, 0, 1, vert_buffers, offsets);
 
+    vkCmdBindIndexBuffer(buffer, _index_buffer, 0, VK_INDEX_TYPE_UINT16);
+
     // Set the dynamic states
     VkViewport viewport{};
     viewport.x = 0.f;
@@ -1207,7 +1245,8 @@ void vk_context::draw_frame() {
     scissor.extent = _swapchain_extent;
     vkCmdSetScissor(buffer, 0, 1, &scissor); // firstScissor, scissorCount
 
-    vkCmdDraw(buffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+    vkCmdDrawIndexed(buffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+    // vkCmdDraw(buffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
     // vkCmdDraw(buffer, 3, 1, 0, 0); // vertexCount, instanceCount, firstVertex, firstInstance
     vkCmdEndRenderPass(buffer);
 

@@ -70,7 +70,7 @@ public:
   void create_graphics_pipeline(std::string_view vert_src, std::string_view frag_src);
   void create_framebuffers();
   void create_commandpool();
-  void create_vertex_buffer();
+  void create_buffers();
   void create_commandbuffers();
   void create_sync_objects();
 
@@ -131,8 +131,8 @@ private:
   std::vector<VkFence> _in_flight_fences;
   uint32_t _curr_frame{0};
 
-  VkBuffer _vertex_buffer;
-  VkDeviceMemory _vertex_buffer_mem;
+  VkBuffer _vertex_buffer, _index_buffer;
+  VkDeviceMemory _vertex_buffer_mem, _index_buffer_mem;
 };
 
 } // namespace ntf
